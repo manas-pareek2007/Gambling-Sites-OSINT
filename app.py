@@ -52,33 +52,63 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def read_domains_from_upload(file_storage) -> set:
-    """Read domains from an uploaded file (Excel, CSV, or TXT)."""
+    """
+    Read domains from an uploaded file (Excel, CSV, or TXT).
+    Smart detection: scans ALL columns for anything that looks like a domain/URL.
+    Works with any Excel/CSV format, not just the specific 'URL of sites' column.
+    """
     filename = file_storage.filename.lower()
     domains = set()
 
     if filename.endswith((".xlsx", ".xls")):
-        # Save to temp, read with openpyxl, delete
         tmp_path = os.path.join(TEMP_DIR, f"upload_{uuid.uuid4().hex}.xlsx")
         file_storage.save(tmp_path)
         try:
-            excel_data = read_excel_domains(tmp_path)
-            for entry in excel_data:
-                d = entry.get("domain", "")
-                if d and is_valid_domain(d):
-                    domains.add(d)
+            import openpyxl
+            wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+
+                # Skip Chartsheets
+                if not hasattr(ws, 'iter_rows'):
+                    continue
+
+                for row in ws.iter_rows(min_row=1):
+                    for cell in row:
+                        val = str(cell.value).strip() if cell.value else ""
+                        if not val or val.lower() in ("none", ""):
+                            continue
+                        # Try to extract a domain from every cell value
+                        d = normalize_domain(val)
+                        if d and is_valid_domain(d):
+                            domains.add(d)
+
+            wb.close()
+        except ImportError:
+            logger.error(
+                "openpyxl is not installed! "
+                "Run: pip install -r requirements.txt"
+            )
+        except Exception as e:
+            logger.error(f"Error reading Excel: {e}")
         finally:
-            os.remove(tmp_path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     elif filename.endswith(".csv"):
         text = file_storage.read().decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(text))
         for row in reader:
-            raw = row.get("domain") or row.get("Domain") or ""
-            d = normalize_domain(raw)
-            if d and is_valid_domain(d):
-                domains.add(d)
+            # Scan ALL columns for domain-like values
+            for key, val in row.items():
+                if val:
+                    d = normalize_domain(val.strip())
+                    if d and is_valid_domain(d):
+                        domains.add(d)
 
     else:
+        # Plain text — one domain per line
         text = file_storage.read().decode("utf-8")
         for line in text.strip().split("\n"):
             line = line.strip()
@@ -87,6 +117,7 @@ def read_domains_from_upload(file_storage) -> set:
                 if d and is_valid_domain(d):
                     domains.add(d)
 
+    logger.info(f"Extracted {len(domains)} domains from uploaded file: {filename}")
     return domains
 
 
@@ -311,9 +342,23 @@ def api_download(download_id):
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # Check dependencies first
+    missing = []
+    for pkg in ["flask", "dns.resolver", "tldextract", "openpyxl", "ipwhois"]:
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing.append(pkg.replace("dns.resolver", "dnspython"))
+
+    if missing:
+        print("\n  ERROR: Missing dependencies!")
+        print(f"  Missing: {', '.join(missing)}")
+        print("  Fix: pip install -r requirements.txt\n")
+        exit(1)
+
     print()
     print("=" * 50)
-    print("  GAMBLING OSINT — Web Interface")
+    print("  GAMBLING OSINT - Web Interface")
     print("  Open: http://localhost:5000")
     print("=" * 50)
     print()
