@@ -81,7 +81,8 @@ def extract_full_domain(raw_input: str) -> str:
 def is_valid_domain(domain: str) -> bool:
     """
     Check whether a string looks like a valid domain name.
-    Basic validation: contains a dot, no spaces, valid characters.
+    Basic validation: contains a dot, no spaces, valid characters,
+    and filters out plain IP addresses and IP-like domains (e.g., 154.198.173.1.co).
     """
     if not domain or not isinstance(domain, str):
         return False
@@ -98,7 +99,30 @@ def is_valid_domain(domain: str) -> bool:
 
     # Basic pattern: alphanumeric, hyphens, dots
     pattern = r'^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$'
-    return bool(re.match(pattern, domain))
+    if not bool(re.match(pattern, domain)):
+        return False
+
+    # Filter out plain IPv4 addresses (e.g. 192.168.1.1)
+    ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+    if re.match(ip_pattern, domain):
+        return False
+
+    # Filter out IP-like domains (e.g. 154.198.173.1.co)
+    try:
+        ext = tldextract.extract(domain)
+        non_tld_parts = []
+        if ext.subdomain:
+            non_tld_parts.extend(ext.subdomain.split('.'))
+        if ext.domain:
+            non_tld_parts.append(ext.domain)
+
+        # If we have 2 or more non-TLD segments and all are purely numeric, it's an IP structure
+        if len(non_tld_parts) >= 2 and all(part.isdigit() for part in non_tld_parts):
+            return False
+    except Exception:
+        pass
+
+    return True
 
 
 def deduplicate_domains(domain_list: list) -> list:
